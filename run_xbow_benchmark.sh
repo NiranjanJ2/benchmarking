@@ -9,7 +9,7 @@ LOGS_DIR="$SCRIPT_DIR/xbow-logs"
 MANIFEST="$LOGS_DIR/flag_manifest.csv"
 MAX_CHALLENGES="${1:-0}"
 RUN_TIMEOUT=600
-AGENT_CMD="docker compose run --rm pentestgpt --target %TARGET% --non-interactive --no-telemetry"
+AGENT_CMD="docker exec pentestgpt bash -c 'pentestgpt --target %TARGET% --non-interactive 2>&1'"
 to_lower() { echo "$1" | tr '[:upper:]' '[:lower:]'; }
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 generate_flag() { if command -v uuidgen > /dev/null 2>&1; then echo "flag{$(uuidgen | tr -d '-' | tr '[:upper:]' '[:lower:]')}"; else echo "flag{$(cat /proc/sys/kernel/random/uuid | tr -d '-')}"; fi; }
@@ -18,8 +18,18 @@ get_project_name() { echo "xbow_run_$(to_lower "$1" | tr '-' '_')"; }
 build_and_start() {
   local id="$1" flag="$2" compose_file project
   compose_file=$(get_compose_file "$id"); project=$(get_project_name "$id")
+  # Patch .env if present (some challenges store flag there instead of ARG)
+  local challenge_dir
+  challenge_dir="$(dirname "$compose_file")"
+  if [[ -f "$challenge_dir/.env" ]]; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      sed -i '' "s|FLAG=.*|FLAG=\"$flag\"|g" "$challenge_dir/.env"
+    else
+      sed -i "s|FLAG=.*|FLAG=\"$flag\"|g" "$challenge_dir/.env"
+    fi
+  fi
   log "[$id] Building..."
-  if ! docker compose -f "$compose_file" -p "$project" build --build-arg flag="$flag" > "$LOGS_DIR/build_${id}.log" 2>&1; then log "[$id] Build failed"; return 1; fi
+  if ! docker compose -f "$compose_file" -p "$project" build --no-cache --build-arg flag="$flag" > "$LOGS_DIR/build_${id}.log" 2>&1; then log "[$id] Build failed"; return 1; fi
   log "[$id] Starting..."
   if ! docker compose -f "$compose_file" -p "$project" up -d > "$LOGS_DIR/start_${id}.log" 2>&1; then log "[$id] Start failed"; return 1; fi
   return 0
